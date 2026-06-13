@@ -1,455 +1,365 @@
-import { useState } from 'react'
-import { motion } from 'framer-motion'
+import { useEffect, useMemo, useState } from 'react'
+import { motion, AnimatePresence } from 'framer-motion'
 import { Toaster, toast } from 'sonner'
 
 const CONTRACT = '0x75787a83F7742b109e5BF723cA9d369CB1DA411B'
 
-type FlightStatus = 'ON TIME' | 'DELAYED' | 'PAID OUT' | 'BOARDING'
+type FlightStatus = 'ON TIME' | 'DELAYED' | 'BOARDING' | 'PAID OUT' | 'CANCELLED'
+
 type Flight = {
   code: string
+  airline: string
   route: string
+  gate: string
   sched: string
   est: string
   status: FlightStatus
+  premium: string
   payout: string
+  delayMin: number
 }
 
-const BOARD: Flight[] = [
-  { code: 'BA 247', route: 'LHR → JFK', sched: '08:40', est: '08:40', status: 'ON TIME', payout: '—' },
-  { code: 'LH 401', route: 'FRA → IAD', sched: '10:15', est: '12:55', status: 'DELAYED', payout: '0.42 ETH' },
-  { code: 'AF 118', route: 'CDG → SFO', sched: '11:05', est: '11:05', status: 'BOARDING', payout: '—' },
-  { code: 'EK 203', route: 'DXB → JFK', sched: '13:30', est: '17:10', status: 'PAID OUT', payout: '0.88 ETH' },
-  { code: 'SQ 322', route: 'SIN → LHR', sched: '14:20', est: '14:20', status: 'ON TIME', payout: '—' },
-  { code: 'UA 930', route: 'SFO → LHR', sched: '16:45', est: '19:20', status: 'DELAYED', payout: '0.55 ETH' },
+const INITIAL_BOARD: Flight[] = [
+  { code: 'BA 247', airline: 'BRITISH AIRWAYS', route: 'LHR — JFK', gate: 'A12', sched: '08:40', est: '08:40', status: 'ON TIME', premium: '0.05', payout: '0.40', delayMin: 0 },
+  { code: 'LH 401', airline: 'LUFTHANSA', route: 'FRA — IAD', gate: 'B07', sched: '10:15', est: '12:55', status: 'DELAYED', premium: '0.06', payout: '0.42', delayMin: 160 },
+  { code: 'AF 118', airline: 'AIR FRANCE', route: 'CDG — SFO', gate: 'C21', sched: '11:05', est: '11:05', status: 'BOARDING', premium: '0.05', payout: '0.38', delayMin: 0 },
+  { code: 'EK 203', airline: 'EMIRATES', route: 'DXB — JFK', gate: 'D04', sched: '13:30', est: '17:10', status: 'PAID OUT', premium: '0.08', payout: '0.88', delayMin: 220 },
+  { code: 'SQ 322', airline: 'SINGAPORE', route: 'SIN — LHR', gate: 'A02', sched: '14:20', est: '14:20', status: 'ON TIME', premium: '0.07', payout: '0.50', delayMin: 0 },
+  { code: 'UA 930', airline: 'UNITED', route: 'SFO — LHR', gate: 'E15', sched: '16:45', est: '19:20', status: 'DELAYED', premium: '0.06', payout: '0.55', delayMin: 155 },
+  { code: 'QF 009', airline: 'QANTAS', route: 'PER — LHR', gate: 'F30', sched: '18:10', est: '18:10', status: 'ON TIME', premium: '0.09', payout: '0.60', delayMin: 0 },
+  { code: 'DL 044', airline: 'DELTA', route: 'ATL — CDG', gate: 'B19', sched: '19:55', est: '21:40', status: 'DELAYED', premium: '0.06', payout: '0.48', delayMin: 105 },
+  { code: 'NH 211', airline: 'ANA', route: 'HND — FRA', gate: 'C08', sched: '21:30', est: '21:30', status: 'BOARDING', premium: '0.07', payout: '0.52', delayMin: 0 },
+  { code: 'AC 858', airline: 'AIR CANADA', route: 'YYZ — LHR', gate: 'D17', sched: '22:15', est: '—', status: 'CANCELLED', premium: '0.05', payout: '0.45', delayMin: 999 },
 ]
 
-const STEPS = [
-  {
-    n: '01',
-    title: 'Pick Your Flight',
-    body: 'Enter any flight number. We pull the scheduled departure from on-chain oracle feeds.',
-  },
-  {
-    n: '02',
-    title: 'Set Your Cover',
-    body: 'Choose a delay threshold and premium. The smart contract quotes an instant payout.',
-  },
-  {
-    n: '03',
-    title: 'Oracle Watches',
-    body: 'Trusted flight-data oracles monitor your departure in real time — no claims to file.',
-  },
-  {
-    n: '04',
-    title: 'Auto Payout',
-    body: 'If your flight is delayed past the threshold, the contract pays your wallet automatically.',
-  },
-]
-
-const FEATURES = [
-  { icon: '⚡', title: 'Instant Settlement', body: 'No paperwork, no adjusters. Payouts execute the moment the delay is confirmed.' },
-  { icon: '🛰️', title: 'Oracle-Verified Data', body: 'Departure and arrival times sourced from decentralized aviation oracles.' },
-  { icon: '🔒', title: 'Funds in Escrow', body: 'Premiums and payouts are locked in audited smart contracts — fully transparent.' },
-  { icon: '🌍', title: 'Global Coverage', body: 'Insure any commercial flight across 4,000+ airports worldwide.' },
-  { icon: '📜', title: 'Parametric Policies', body: 'Objective triggers mean no disputes. Delay = payout. Simple.' },
-  { icon: '💸', title: 'Fair Pricing', body: 'Premiums priced by live delay-risk models, not opaque underwriting.' },
-]
-
-const fadeUp = {
-  hidden: { opacity: 0, y: 32 },
-  show: { opacity: 1, y: 0 },
+const STATUS_STYLE: Record<FlightStatus, string> = {
+  'ON TIME': 'text-emerald-300',
+  DELAYED: 'text-amber-300',
+  BOARDING: 'text-sky-200',
+  'PAID OUT': 'text-cyan-300',
+  CANCELLED: 'text-rose-300',
 }
 
-const statusStyles: Record<FlightStatus, string> = {
-  'ON TIME': 'text-emerald-600',
-  DELAYED: 'text-amber-600',
-  'PAID OUT': 'text-[#0A4D8C]',
-  BOARDING: 'text-sky-600',
+// A single split-flap character cell that flips when its value changes.
+function FlapCell({ char }: { char: string }) {
+  return (
+    <span className="relative inline-flex h-8 min-w-[0.72em] items-center justify-center overflow-hidden rounded-[3px] bg-[#06223f] px-[1px] text-[#e9f3ff] shadow-inner">
+      <AnimatePresence mode="popLayout" initial={false}>
+        <motion.span
+          key={char}
+          initial={{ rotateX: -90, opacity: 0 }}
+          animate={{ rotateX: 0, opacity: 1 }}
+          exit={{ rotateX: 90, opacity: 0 }}
+          transition={{ duration: 0.22, ease: 'easeOut' }}
+          className="block leading-none"
+          style={{ transformOrigin: 'center' }}
+        >
+          {char === ' ' ? '\u00A0' : char}
+        </motion.span>
+      </AnimatePresence>
+      <span className="pointer-events-none absolute left-0 right-0 top-1/2 h-px bg-black/40" />
+    </span>
+  )
 }
 
-function App() {
-  const [flight, setFlight] = useState('')
-  const [threshold, setThreshold] = useState('120')
-  const [premium, setPremium] = useState('')
-  const [loading, setLoading] = useState(false)
+function FlapText({ text, className = '' }: { text: string; className?: string }) {
+  return (
+    <span className={`inline-flex gap-[2px] font-mono tracking-tight ${className}`}>
+      {text.split('').map((c, i) => (
+        <FlapCell key={i} char={c} />
+      ))}
+    </span>
+  )
+}
 
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault()
-    if (!flight || !premium) {
-      toast.error('Enter a flight number and a premium to get a quote.')
+function useClock() {
+  const [now, setNow] = useState(new Date())
+  useEffect(() => {
+    const t = setInterval(() => setNow(new Date()), 1000)
+    return () => clearInterval(t)
+  }, [])
+  return now
+}
+
+export default function App() {
+  const now = useClock()
+  const [board, setBoard] = useState<Flight[]>(INITIAL_BOARD)
+  const [selected, setSelected] = useState<Flight | null>(null)
+  const [filter, setFilter] = useState<'ALL' | 'DELAYED'>('ALL')
+
+  // Policy form
+  const [flightNo, setFlightNo] = useState('')
+  const [date, setDate] = useState('')
+  const [threshold, setThreshold] = useState(120)
+  const [premium, setPremium] = useState(0.05)
+
+  const clock = now.toLocaleTimeString('en-GB', { hour12: false })
+  const dateStr = now.toLocaleDateString('en-GB', { weekday: 'short', day: '2-digit', month: 'short' }).toUpperCase()
+
+  const visible = useMemo(
+    () => (filter === 'ALL' ? board : board.filter((f) => f.status === 'DELAYED')),
+    [board, filter],
+  )
+
+  const stats = useMemo(() => {
+    const delayed = board.filter((f) => f.status === 'DELAYED').length
+    const paid = board.filter((f) => f.status === 'PAID OUT').length
+    const totalPayout = board
+      .filter((f) => f.status === 'PAID OUT')
+      .reduce((s, f) => s + parseFloat(f.payout), 0)
+    return { delayed, paid, totalPayout }
+  }, [board])
+
+  function buyPolicy() {
+    if (!flightNo.trim()) {
+      toast.error('Enter a flight number to insure.')
       return
     }
-    setLoading(true)
-    toast.loading('Querying oracle for flight status…', { id: 'policy' })
-    setTimeout(() => {
-      setLoading(false)
-      const delayed = Math.random() > 0.5
-      if (delayed) {
-        const payout = (parseFloat(premium) * 8).toFixed(3)
-        toast.success(
-          `${flight.toUpperCase()} delayed past ${threshold} min — payout of ${payout} ETH triggered ✈️`,
-          { id: 'policy' },
-        )
-      } else {
-        toast.info(`${flight.toUpperCase()} is on time. Policy active — you're covered.`, {
-          id: 'policy',
-        })
-      }
-    }, 3000)
+    const payout = (premium * 8).toFixed(2)
+    const newFlight: Flight = {
+      code: flightNo.toUpperCase(),
+      airline: 'YOUR POLICY',
+      route: '— — —',
+      gate: '--',
+      sched: '--:--',
+      est: '--:--',
+      status: 'ON TIME',
+      premium: premium.toFixed(2),
+      payout,
+      delayMin: 0,
+    }
+    setBoard((b) => [newFlight, ...b])
+    toast.success(`Policy minted · ${flightNo.toUpperCase()} · payout ${payout} ETH if delayed > ${threshold}m`)
+    setFlightNo('')
+  }
+
+  function onRowClick(f: Flight) {
+    setSelected(f)
+    if (f.status === 'DELAYED') {
+      toast(`${f.code} delayed ${f.delayMin}m — claim ${f.payout} ETH ready`, { icon: '🛬' })
+    }
+  }
+
+  function claim(f: Flight) {
+    setBoard((b) => b.map((x) => (x.code === f.code ? { ...x, status: 'PAID OUT' } : x)))
+    setSelected((s) => (s ? { ...s, status: 'PAID OUT' } : s))
+    toast.success(`${f.payout} ETH settled to wallet — claim closed`)
   }
 
   return (
-    <div className="min-h-screen bg-[#F4F8FB] text-slate-800 font-sans antialiased selection:bg-[#0A4D8C] selection:text-white">
-      <Toaster position="top-right" richColors />
+    <div className="min-h-screen bg-[#F4F8FB] font-mono text-[#0A4D8C]">
+      <Toaster position="top-center" richColors theme="dark" />
 
-      {/* Navbar */}
-      <header className="sticky top-0 z-50 backdrop-blur-md bg-[#F4F8FB]/85 border-b border-slate-200">
-        <nav className="mx-auto max-w-7xl px-6 h-16 flex items-center justify-between">
-          <a href="#" className="flex items-center gap-2 font-extrabold text-xl tracking-tight text-[#0A4D8C]">
-            <span className="grid place-items-center h-9 w-9 rounded-xl bg-[#0A4D8C] text-white text-lg">
-              ✈
-            </span>
-            <span>FlightShield</span>
-          </a>
-          <div className="hidden md:flex items-center gap-8 text-sm font-medium text-slate-500">
-            <a href="#board" className="hover:text-[#0A4D8C] transition">Live Board</a>
-            <a href="#how" className="hover:text-[#0A4D8C] transition">How it Works</a>
-            <a href="#features" className="hover:text-[#0A4D8C] transition">Coverage</a>
-            <a href="#quote" className="hover:text-[#0A4D8C] transition">Get a Quote</a>
+      {/* Terminal header bar */}
+      <header className="sticky top-0 z-20 border-b-4 border-[#0A4D8C] bg-[#0A4D8C] text-white">
+        <div className="mx-auto flex max-w-[1500px] flex-wrap items-center justify-between gap-3 px-5 py-3">
+          <div className="flex items-center gap-3">
+            <div className="grid h-10 w-10 place-items-center rounded bg-[#F4F8FB] text-lg text-[#0A4D8C]">✈</div>
+            <div className="leading-tight">
+              <div className="text-lg font-bold tracking-[0.25em]">FLIGHTSHIELD</div>
+              <div className="text-[10px] tracking-[0.35em] text-sky-200">DEPARTURES · PARAMETRIC COVER</div>
+            </div>
           </div>
-          <a
-            href="#quote"
-            className="rounded-full bg-[#0A4D8C] px-5 py-2 text-sm font-semibold text-white hover:bg-[#083d70] transition"
-          >
-            Insure a Flight
-          </a>
-        </nav>
+          <div className="flex items-center gap-2 rounded bg-[#06223f] px-3 py-1.5">
+            <span className="text-[10px] tracking-[0.3em] text-sky-300">{dateStr}</span>
+            <span className="text-2xl font-bold tabular-nums tracking-widest text-emerald-300">{clock}</span>
+          </div>
+          <div className="flex items-center gap-4 text-[11px] tracking-wider">
+            <span className="text-amber-300">⬤ {stats.delayed} DELAYED</span>
+            <span className="text-cyan-300">⬤ {stats.paid} PAID</span>
+            <span className="hidden text-sky-200 sm:inline">CONTRACT {CONTRACT.slice(0, 6)}…{CONTRACT.slice(-4)}</span>
+          </div>
+        </div>
       </header>
 
-      {/* Hero */}
-      <section className="relative overflow-hidden">
-        <div
-          className="pointer-events-none absolute -top-40 right-0 h-[460px] w-[760px] rounded-full blur-3xl"
-          style={{ background: 'radial-gradient(closest-side, rgba(10,77,140,0.12), transparent)' }}
-        />
-        <div className="mx-auto max-w-7xl px-6 py-24 md:py-32 grid lg:grid-cols-2 gap-12 items-center relative">
-          <div>
-            <motion.div
-              initial="hidden"
-              animate="show"
-              variants={fadeUp}
-              transition={{ duration: 0.6 }}
-              className="inline-flex items-center gap-2 rounded-full border border-[#0A4D8C]/20 bg-white px-4 py-1.5 text-xs font-semibold text-[#0A4D8C] uppercase tracking-widest shadow-sm"
-            >
-              <span className="h-2 w-2 rounded-full bg-emerald-500 animate-pulse" />
-              Parametric · On-chain · Claimless
-            </motion.div>
-
-            <motion.h1
-              initial="hidden"
-              animate="show"
-              variants={fadeUp}
-              transition={{ duration: 0.6, delay: 0.1 }}
-              className="mt-6 text-5xl md:text-6xl font-extrabold leading-[1.02] tracking-tight text-slate-900"
-            >
-              Flight delayed?
-              <br />
-              <span className="text-[#0A4D8C]">You're paid before you land.</span>
-            </motion.h1>
-
-            <motion.p
-              initial="hidden"
-              animate="show"
-              variants={fadeUp}
-              transition={{ duration: 0.6, delay: 0.2 }}
-              className="mt-6 max-w-xl text-lg text-slate-600"
-            >
-              FlightShield is parametric flight-delay insurance built on smart contracts.
-              No claims, no call centers — just automatic payouts triggered by oracle-verified delays.
-            </motion.p>
-
-            <motion.div
-              initial="hidden"
-              animate="show"
-              variants={fadeUp}
-              transition={{ duration: 0.6, delay: 0.3 }}
-              className="mt-9 flex flex-col sm:flex-row gap-4"
-            >
-              <a
-                href="#quote"
-                className="rounded-full bg-[#0A4D8C] px-8 py-4 font-semibold text-white text-center hover:bg-[#083d70] transition"
-              >
-                Get a Quote
-              </a>
-              <a
-                href="#board"
-                className="rounded-full border border-slate-300 bg-white px-8 py-4 font-semibold text-slate-700 text-center hover:border-[#0A4D8C] hover:text-[#0A4D8C] transition"
-              >
-                View Live Board
-              </a>
-            </motion.div>
-
-            <motion.div
-              initial="hidden"
-              animate="show"
-              variants={fadeUp}
-              transition={{ duration: 0.6, delay: 0.4 }}
-              className="mt-12 grid grid-cols-3 gap-6 max-w-md"
-            >
-              {[
-                ['4,000+', 'Airports'],
-                ['90s', 'Avg. payout'],
-                ['$2.1M', 'Paid out'],
-              ].map(([stat, label]) => (
-                <div key={label}>
-                  <div className="text-2xl md:text-3xl font-extrabold text-[#0A4D8C]">{stat}</div>
-                  <div className="mt-1 text-xs uppercase tracking-widest text-slate-400">{label}</div>
-                </div>
-              ))}
-            </motion.div>
-          </div>
-
-          {/* Hero board preview */}
-          <motion.div
-            initial={{ opacity: 0, scale: 0.96, y: 20 }}
-            animate={{ opacity: 1, scale: 1, y: 0 }}
-            transition={{ duration: 0.7, delay: 0.2 }}
-            className="rounded-2xl bg-slate-900 p-5 shadow-2xl shadow-slate-300/60 ring-1 ring-slate-800"
-          >
-            <div className="flex items-center justify-between text-amber-300 font-mono text-xs uppercase tracking-widest mb-4">
-              <span>Departures</span>
-              <span className="text-emerald-400">● Live</span>
-            </div>
-            <div className="space-y-2 font-mono text-sm">
-              {BOARD.slice(0, 4).map((f) => (
-                <div
-                  key={f.code}
-                  className="grid grid-cols-[1fr_auto] items-center gap-3 rounded-lg bg-slate-800/60 px-3 py-2"
+      <main className="mx-auto grid max-w-[1500px] gap-5 px-4 py-5 lg:grid-cols-[1fr_320px]">
+        {/* THE BOARD */}
+        <section className="overflow-hidden rounded-xl border-2 border-[#0A4D8C] bg-[#0a2c4d] shadow-2xl">
+          <div className="flex items-center justify-between border-b border-[#0A4D8C]/60 bg-[#06223f] px-4 py-2.5">
+            <h2 className="text-sm font-bold tracking-[0.35em] text-amber-300">◗ DEPARTURES</h2>
+            <div className="flex gap-1 text-[11px]">
+              {(['ALL', 'DELAYED'] as const).map((f) => (
+                <button
+                  key={f}
+                  onClick={() => setFilter(f)}
+                  className={`rounded px-2.5 py-1 tracking-widest transition ${
+                    filter === f ? 'bg-amber-300 text-[#06223f]' : 'bg-[#0a2c4d] text-sky-200 hover:bg-[#0A4D8C]'
+                  }`}
                 >
-                  <div className="flex items-center gap-3 text-amber-200">
-                    <span className="font-bold">{f.code}</span>
-                    <span className="text-slate-400">{f.route}</span>
-                  </div>
-                  <span
-                    className={`text-xs font-bold ${
-                      f.status === 'DELAYED' || f.status === 'PAID OUT'
-                        ? 'text-amber-400'
-                        : 'text-emerald-400'
-                    }`}
-                  >
-                    {f.status}
-                  </span>
-                </div>
+                  {f}
+                </button>
               ))}
             </div>
-          </motion.div>
-        </div>
-      </section>
-
-      {/* Live Flight Board */}
-      <section id="board" className="mx-auto max-w-7xl px-6 py-20">
-        <motion.div
-          initial="hidden"
-          whileInView="show"
-          viewport={{ once: true, margin: '-80px' }}
-          variants={fadeUp}
-          transition={{ duration: 0.5 }}
-          className="mb-8"
-        >
-          <h2 className="text-3xl md:text-4xl font-extrabold text-slate-900">Live Flight Board</h2>
-          <p className="mt-2 text-slate-500">Oracle-tracked departures and active FlightShield policies.</p>
-        </motion.div>
-
-        <motion.div
-          initial="hidden"
-          whileInView="show"
-          viewport={{ once: true, margin: '-60px' }}
-          variants={fadeUp}
-          transition={{ duration: 0.5 }}
-          className="overflow-hidden rounded-2xl bg-slate-900 shadow-xl ring-1 ring-slate-800"
-        >
-          <div className="grid grid-cols-[1.1fr_1.4fr_0.8fr_0.8fr_1fr_1fr] gap-2 px-5 py-3 font-mono text-[11px] uppercase tracking-widest text-slate-400 border-b border-slate-700">
-            <span>Flight</span>
-            <span>Route</span>
-            <span>Sched</span>
-            <span>Est</span>
-            <span>Status</span>
-            <span className="text-right">Payout</span>
           </div>
-          <div className="divide-y divide-slate-800">
-            {BOARD.map((f, i) => (
-              <motion.div
-                key={f.code}
+
+          {/* Column headers */}
+          <div className="grid grid-cols-[1.1fr_1.4fr_0.7fr_0.7fr_1fr_0.9fr] gap-2 border-b border-amber-300/30 px-4 py-2 text-[10px] tracking-[0.25em] text-amber-200/80">
+            <span>FLIGHT</span>
+            <span>ROUTE</span>
+            <span>GATE</span>
+            <span>SCHED</span>
+            <span>STATUS</span>
+            <span className="text-right">PAYOUT</span>
+          </div>
+
+          <div className="divide-y divide-white/5">
+            {visible.map((f, i) => (
+              <motion.button
+                key={f.code + i}
+                onClick={() => onRowClick(f)}
                 initial={{ opacity: 0, x: -12 }}
-                whileInView={{ opacity: 1, x: 0 }}
-                viewport={{ once: true }}
-                transition={{ duration: 0.35, delay: i * 0.05 }}
-                className="grid grid-cols-[1.1fr_1.4fr_0.8fr_0.8fr_1fr_1fr] gap-2 px-5 py-4 font-mono text-sm text-amber-100 hover:bg-slate-800/50 transition"
+                animate={{ opacity: 1, x: 0 }}
+                transition={{ delay: i * 0.04 }}
+                className={`grid w-full grid-cols-[1.1fr_1.4fr_0.7fr_0.7fr_1fr_0.9fr] items-center gap-2 px-4 py-2 text-left transition hover:bg-white/5 ${
+                  selected?.code === f.code ? 'bg-amber-300/10 ring-1 ring-inset ring-amber-300/40' : ''
+                }`}
               >
-                <span className="font-bold text-amber-300">{f.code}</span>
-                <span className="text-slate-300">{f.route}</span>
-                <span>{f.sched}</span>
-                <span className={f.est !== f.sched ? 'text-amber-400' : ''}>{f.est}</span>
-                <span className={`font-bold ${statusStyles[f.status]} brightness-150`}>{f.status}</span>
-                <span className="text-right text-emerald-400 font-bold">{f.payout}</span>
-              </motion.div>
+                <FlapText text={f.code} className="text-sm" />
+                <span className="truncate text-sm tracking-widest text-sky-100">{f.route}</span>
+                <FlapText text={f.gate} className="text-xs" />
+                <FlapText text={f.est === '—' ? f.sched : f.est} className="text-xs" />
+                <span className={`text-xs font-bold tracking-widest ${STATUS_STYLE[f.status]}`}>
+                  {f.status === 'DELAYED' && <span className="mr-1 animate-pulse">●</span>}
+                  {f.status}
+                </span>
+                <span className="text-right text-sm font-bold tabular-nums text-amber-300">
+                  {f.payout === '—' ? '—' : `${f.payout} Ξ`}
+                </span>
+              </motion.button>
             ))}
           </div>
-        </motion.div>
-      </section>
 
-      {/* How it Works */}
-      <section id="how" className="border-y border-slate-200 bg-white">
-        <div className="mx-auto max-w-7xl px-6 py-20">
-          <motion.h2
-            initial="hidden"
-            whileInView="show"
-            viewport={{ once: true }}
-            variants={fadeUp}
-            transition={{ duration: 0.5 }}
-            className="text-3xl md:text-4xl font-extrabold text-center text-slate-900"
-          >
-            How it <span className="text-[#0A4D8C]">Works</span>
-          </motion.h2>
-
-          <div className="mt-14 grid md:grid-cols-2 lg:grid-cols-4 gap-6">
-            {STEPS.map((s, i) => (
-              <motion.div
-                key={s.n}
-                initial="hidden"
-                whileInView="show"
-                viewport={{ once: true, margin: '-60px' }}
-                variants={fadeUp}
-                transition={{ duration: 0.5, delay: i * 0.1 }}
-                className="rounded-2xl border border-slate-200 bg-[#F4F8FB] p-6"
-              >
-                <div className="font-mono text-4xl font-extrabold text-[#0A4D8C]/25">{s.n}</div>
-                <h3 className="mt-3 text-lg font-bold text-slate-900">{s.title}</h3>
-                <p className="mt-2 text-sm text-slate-600 leading-relaxed">{s.body}</p>
-              </motion.div>
-            ))}
+          <div className="flex items-center justify-between border-t border-amber-300/20 bg-[#06223f] px-4 py-2 text-[10px] tracking-[0.25em] text-sky-300">
+            <span>LIVE ORACLE FEED · {visible.length} FLIGHTS</span>
+            <span className="text-cyan-300">TOTAL SETTLED {stats.totalPayout.toFixed(2)} Ξ</span>
           </div>
-        </div>
-      </section>
+        </section>
 
-      {/* Features */}
-      <section id="features" className="mx-auto max-w-7xl px-6 py-20">
-        <motion.h2
-          initial="hidden"
-          whileInView="show"
-          viewport={{ once: true }}
-          variants={fadeUp}
-          transition={{ duration: 0.5 }}
-          className="text-3xl md:text-4xl font-extrabold text-center text-slate-900"
-        >
-          Coverage you can <span className="text-[#0A4D8C]">trust.</span>
-        </motion.h2>
-
-        <div className="mt-14 grid md:grid-cols-2 lg:grid-cols-3 gap-6">
-          {FEATURES.map((f, i) => (
-            <motion.div
-              key={f.title}
-              initial="hidden"
-              whileInView="show"
-              viewport={{ once: true, margin: '-60px' }}
-              variants={fadeUp}
-              transition={{ duration: 0.5, delay: i * 0.06 }}
-              className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm hover:shadow-md hover:-translate-y-0.5 transition"
+        {/* SIDE PANEL */}
+        <aside className="flex flex-col gap-5">
+          {/* Buy policy */}
+          <div className="rounded-xl border-2 border-[#0A4D8C] bg-white p-4 shadow-lg">
+            <h3 className="mb-3 border-b-2 border-dashed border-[#0A4D8C]/30 pb-2 text-xs font-bold tracking-[0.3em] text-[#0A4D8C]">
+              ✓ INSURE A FLIGHT
+            </h3>
+            <label className="mb-1 block text-[10px] tracking-widest text-[#0A4D8C]/70">FLIGHT NUMBER</label>
+            <input
+              value={flightNo}
+              onChange={(e) => setFlightNo(e.target.value)}
+              placeholder="e.g. BA 248"
+              className="mb-3 w-full rounded border-2 border-[#0A4D8C]/30 bg-[#F4F8FB] px-3 py-2 text-sm uppercase tracking-widest outline-none focus:border-[#0A4D8C]"
+            />
+            <label className="mb-1 block text-[10px] tracking-widest text-[#0A4D8C]/70">DEPARTURE DATE</label>
+            <input
+              type="date"
+              value={date}
+              onChange={(e) => setDate(e.target.value)}
+              className="mb-3 w-full rounded border-2 border-[#0A4D8C]/30 bg-[#F4F8FB] px-3 py-2 text-sm outline-none focus:border-[#0A4D8C]"
+            />
+            <label className="mb-1 block text-[10px] tracking-widest text-[#0A4D8C]/70">
+              DELAY THRESHOLD · <span className="font-bold text-[#0A4D8C]">{threshold} MIN</span>
+            </label>
+            <input
+              type="range"
+              min={30}
+              max={300}
+              step={15}
+              value={threshold}
+              onChange={(e) => setThreshold(+e.target.value)}
+              className="mb-3 w-full accent-[#0A4D8C]"
+            />
+            <label className="mb-1 block text-[10px] tracking-widest text-[#0A4D8C]/70">
+              PREMIUM · <span className="font-bold text-[#0A4D8C]">{premium.toFixed(2)} Ξ</span>
+            </label>
+            <input
+              type="range"
+              min={0.01}
+              max={0.2}
+              step={0.01}
+              value={premium}
+              onChange={(e) => setPremium(+e.target.value)}
+              className="mb-3 w-full accent-[#0A4D8C]"
+            />
+            <div className="mb-3 flex items-center justify-between rounded bg-[#0A4D8C] px-3 py-2 text-white">
+              <span className="text-[10px] tracking-widest">EST. PAYOUT</span>
+              <span className="text-lg font-bold tabular-nums text-amber-300">{(premium * 8).toFixed(2)} Ξ</span>
+            </div>
+            <button
+              onClick={buyPolicy}
+              className="w-full rounded bg-amber-400 py-2.5 text-sm font-bold tracking-[0.2em] text-[#06223f] transition hover:bg-amber-300"
             >
-              <div className="text-3xl">{f.icon}</div>
-              <h3 className="mt-4 text-lg font-bold text-slate-900">{f.title}</h3>
-              <p className="mt-2 text-sm text-slate-600 leading-relaxed">{f.body}</p>
-            </motion.div>
-          ))}
-        </div>
-      </section>
+              MINT POLICY →
+            </button>
+          </div>
 
-      {/* Quote Form */}
-      <section id="quote" className="border-t border-slate-200 bg-white">
-        <div className="mx-auto max-w-3xl px-6 py-20">
-          <motion.div
-            initial="hidden"
-            whileInView="show"
-            viewport={{ once: true }}
-            variants={fadeUp}
-            transition={{ duration: 0.5 }}
-            className="rounded-3xl border border-slate-200 bg-[#F4F8FB] p-8 md:p-10 shadow-sm"
-          >
-            <h2 className="text-3xl font-extrabold text-slate-900">Get an Instant Quote</h2>
-            <p className="mt-2 text-slate-600">
-              Enter your flight details. We&apos;ll simulate an oracle check and settlement in 3 seconds.
-            </p>
-
-            <form onSubmit={handleSubmit} className="mt-8 space-y-5">
-              <div>
-                <label className="block text-sm font-semibold mb-2 text-slate-700">Flight number</label>
-                <input
-                  value={flight}
-                  onChange={(e) => setFlight(e.target.value)}
-                  placeholder="e.g. BA 247"
-                  className="w-full rounded-xl border border-slate-300 bg-white px-4 py-3 font-mono outline-none focus:border-[#0A4D8C] focus:ring-2 focus:ring-[#0A4D8C]/20 transition placeholder:text-slate-400"
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-semibold mb-2 text-slate-700">
-                  Delay threshold (minutes)
-                </label>
-                <select
-                  value={threshold}
-                  onChange={(e) => setThreshold(e.target.value)}
-                  className="w-full rounded-xl border border-slate-300 bg-white px-4 py-3 outline-none focus:border-[#0A4D8C] focus:ring-2 focus:ring-[#0A4D8C]/20 transition"
+          {/* Selected flight / claim ticket */}
+          <div className="rounded-xl border-2 border-[#0A4D8C] bg-[#0a2c4d] p-4 text-white shadow-lg">
+            <h3 className="mb-3 text-xs font-bold tracking-[0.3em] text-amber-300">🎫 CLAIM TICKET</h3>
+            <AnimatePresence mode="wait">
+              {selected ? (
+                <motion.div
+                  key={selected.code}
+                  initial={{ opacity: 0, y: 10 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: -10 }}
+                  className="space-y-2 text-sm"
                 >
-                  <option value="60">60 minutes</option>
-                  <option value="120">120 minutes</option>
-                  <option value="180">180 minutes</option>
-                </select>
-              </div>
-              <div>
-                <label className="block text-sm font-semibold mb-2 text-slate-700">Premium (ETH)</label>
-                <input
-                  value={premium}
-                  onChange={(e) => setPremium(e.target.value)}
-                  type="number"
-                  step="0.01"
-                  min="0"
-                  placeholder="0.05"
-                  className="w-full rounded-xl border border-slate-300 bg-white px-4 py-3 font-mono outline-none focus:border-[#0A4D8C] focus:ring-2 focus:ring-[#0A4D8C]/20 transition placeholder:text-slate-400"
-                />
-              </div>
-              <button
-                type="submit"
-                disabled={loading}
-                className="w-full rounded-xl bg-[#0A4D8C] px-6 py-4 font-semibold text-white hover:bg-[#083d70] transition disabled:opacity-60 disabled:cursor-not-allowed"
-              >
-                {loading ? 'Checking oracle…' : 'Get Quote & Bind Policy'}
-              </button>
-            </form>
-          </motion.div>
-        </div>
-      </section>
+                  <div className="flex items-baseline justify-between">
+                    <FlapText text={selected.code} className="text-base" />
+                    <span className={`text-xs font-bold ${STATUS_STYLE[selected.status]}`}>{selected.status}</span>
+                  </div>
+                  <div className="text-xs tracking-widest text-sky-200">{selected.airline}</div>
+                  <div className="border-t border-dashed border-white/20 pt-2 text-xs tracking-widest text-sky-100">
+                    {selected.route} · GATE {selected.gate}
+                  </div>
+                  <div className="flex justify-between text-xs text-sky-200">
+                    <span>SCHED {selected.sched}</span>
+                    <span>EST {selected.est}</span>
+                  </div>
+                  {selected.delayMin > 0 && selected.delayMin < 999 && (
+                    <div className="text-xs text-amber-300">DELAY · {selected.delayMin} MIN</div>
+                  )}
+                  <div className="mt-2 flex items-center justify-between rounded bg-[#06223f] px-3 py-2">
+                    <span className="text-[10px] tracking-widest text-sky-300">PAYOUT</span>
+                    <span className="text-xl font-bold tabular-nums text-amber-300">{selected.payout} Ξ</span>
+                  </div>
+                  {selected.status === 'DELAYED' ? (
+                    <button
+                      onClick={() => claim(selected)}
+                      className="w-full rounded bg-emerald-400 py-2 text-sm font-bold tracking-[0.2em] text-[#06223f] transition hover:bg-emerald-300"
+                    >
+                      CLAIM {selected.payout} Ξ
+                    </button>
+                  ) : selected.status === 'PAID OUT' ? (
+                    <div className="rounded border border-cyan-400/40 py-2 text-center text-xs tracking-widest text-cyan-300">
+                      ✓ SETTLED ON-CHAIN
+                    </div>
+                  ) : (
+                    <div className="rounded border border-white/15 py-2 text-center text-xs tracking-widest text-sky-300">
+                      MONITORING · NO DELAY YET
+                    </div>
+                  )}
+                </motion.div>
+              ) : (
+                <motion.p
+                  key="empty"
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  className="py-6 text-center text-xs tracking-widest text-sky-400"
+                >
+                  ◗ SELECT A ROW ON THE BOARD
+                  <br />
+                  <span className="text-sky-500">DELAYED FLIGHTS ARE CLAIMABLE</span>
+                </motion.p>
+              )}
+            </AnimatePresence>
+          </div>
+        </aside>
+      </main>
 
-      {/* Footer */}
-      <footer className="border-t border-slate-200 bg-[#F4F8FB]">
-        <div className="mx-auto max-w-7xl px-6 py-12">
-          <div className="flex flex-col md:flex-row items-center justify-between gap-6">
-            <div className="flex items-center gap-2 font-extrabold text-lg text-[#0A4D8C]">
-              <span className="grid place-items-center h-8 w-8 rounded-xl bg-[#0A4D8C] text-white">
-                ✈
-              </span>
-              FlightShield
-            </div>
-            <div className="text-sm text-slate-500 text-center">
-              Contract:{' '}
-              <code className="font-mono text-[#0A4D8C] break-all">{CONTRACT}</code>
-            </div>
-          </div>
-          <div className="mt-8 pt-6 border-t border-slate-200 text-center text-xs text-slate-400">
-            © {new Date().getFullYear()} FlightShield. Parametric cover is illustrative. Not financial advice.
-          </div>
-        </div>
+      <footer className="border-t-2 border-[#0A4D8C]/20 bg-[#0A4D8C] py-3 text-center text-[10px] tracking-[0.3em] text-sky-200">
+        FLIGHTSHIELD · ORACLE-VERIFIED PARAMETRIC PAYOUTS · {CONTRACT}
       </footer>
     </div>
   )
 }
-
-export default App
