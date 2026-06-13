@@ -1,59 +1,13 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
-<head>
-  <meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>FlightShield</title>
-  <script src="https://cdn.tailwindcss.com"></script>
-  <style>
-    @keyframes blink { 0%,100%{opacity:1} 50%{opacity:0.5} }
-    .blink { animation: blink 1.5s infinite }
-    .board-row { font-family: 'Courier New', monospace; letter-spacing: 0.05em }
-  </style>
-</head>
-<body class="bg-[#001a33] text-white min-h-screen">
-  <nav class="bg-[#002244] border-b border-sky-900 px-6 py-4 flex justify-between items-center">
-    <div class="flex items-center gap-3"><span class="text-2xl">✈️</span><h1 class="text-xl font-bold">FlightShield</h1></div>
-    <span class="text-sky-400 text-sm">Parametric Flight Insurance</span>
-  </nav>
-
-  <main class="max-w-3xl mx-auto p-6 space-y-6">
-    <!-- Flight Board Header -->
-    <div class="bg-[#002244] rounded-xl p-4 border border-sky-900">
-      <div class="board-row grid grid-cols-5 text-xs text-sky-400 uppercase mb-2 px-2">
-        <span>Flight</span><span>Date</span><span>Threshold</span><span>Status</span><span>Claim</span>
-      </div>
-      <div class="board-row grid grid-cols-5 text-sm bg-sky-950/50 rounded-lg px-2 py-3 items-center">
-        <span class="font-bold">BA287</span>
-        <span>2025-06-10</span>
-        <span>120 min</span>
-        <span class="text-red-400 blink">DENIED</span>
-        <span class="text-xs text-gray-500">No data</span>
-      </div>
-    </div>
-
-    <!-- Buy Policy -->
-    <section class="bg-[#002244] rounded-2xl p-6 border border-sky-800">
-      <h2 class="text-sky-300 font-semibold mb-4">Buy Coverage</h2>
-      <div class="grid md:grid-cols-3 gap-3 mb-3">
-        <input placeholder="Flight (e.g. BA287)" class="bg-[#001a33] border border-sky-800 rounded-xl px-4 py-3 placeholder-sky-700 outline-none focus:border-sky-500">
-        <input type="date" class="bg-[#001a33] border border-sky-800 rounded-xl px-4 py-3 text-white outline-none focus:border-sky-500">
-        <div class="flex items-center gap-2">
-          <input type="range" min="30" max="240" value="120" id="thresh" class="flex-1" oninput="document.getElementById('tv').textContent=this.value+'m'">
-          <span id="tv" class="text-sky-300 text-sm font-mono w-10">120m</span>
-        </div>
-      </div>
-      <button class="w-full bg-sky-600 hover:bg-sky-500 rounded-xl py-3 font-bold transition">Buy Policy</button>
-    </section>
-
-    <!-- File Claim -->
-    <section class="bg-[#002244] rounded-2xl p-6 border border-sky-800">
-      <h2 class="text-amber-300 font-semibold mb-4">File Claim</h2>
-      <div class="flex gap-3">
-        <input placeholder="Policy key" class="flex-1 bg-[#001a33] border border-sky-800 rounded-xl px-4 py-3 placeholder-sky-700 outline-none">
-        <button class="bg-amber-600 hover:bg-amber-500 rounded-xl px-6 py-3 font-bold transition">⚡ Claim</button>
-      </div>
-      <p class="text-sky-600 text-xs mt-2">AI validators fetch flight data from FlightStats and verify delay in real-time.</p>
-    </section>
-  </main>
-</body>
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="description" content="FlightShield — parametric flight-delay insurance on-chain. Automatic, oracle-verified payouts. No claims, no call centers." />
+    <title>FlightShield · Parametric Flight Delay Insurance</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
 </html>
