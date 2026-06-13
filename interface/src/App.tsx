@@ -1,12 +1,12 @@
 import { useEffect, useMemo, useState } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { Toaster, toast } from 'sonner'
-
-const CONTRACT = '0x75787a83F7742b109e5BF723cA9d369CB1DA411B'
+import { read, write, CONTRACT } from './genlayer'
 
 type FlightStatus = 'ON TIME' | 'DELAYED' | 'BOARDING' | 'PAID OUT' | 'CANCELLED'
 
 type Flight = {
+  key: string
   code: string
   airline: string
   route: string
@@ -17,20 +17,11 @@ type Flight = {
   premium: string
   payout: string
   delayMin: number
+  threshold: number
+  delayFound: boolean
+  reasoning: string
+  rawStatus: string
 }
-
-const INITIAL_BOARD: Flight[] = [
-  { code: 'BA 247', airline: 'BRITISH AIRWAYS', route: 'LHR — JFK', gate: 'A12', sched: '08:40', est: '08:40', status: 'ON TIME', premium: '0.05', payout: '0.40', delayMin: 0 },
-  { code: 'LH 401', airline: 'LUFTHANSA', route: 'FRA — IAD', gate: 'B07', sched: '10:15', est: '12:55', status: 'DELAYED', premium: '0.06', payout: '0.42', delayMin: 160 },
-  { code: 'AF 118', airline: 'AIR FRANCE', route: 'CDG — SFO', gate: 'C21', sched: '11:05', est: '11:05', status: 'BOARDING', premium: '0.05', payout: '0.38', delayMin: 0 },
-  { code: 'EK 203', airline: 'EMIRATES', route: 'DXB — JFK', gate: 'D04', sched: '13:30', est: '17:10', status: 'PAID OUT', premium: '0.08', payout: '0.88', delayMin: 220 },
-  { code: 'SQ 322', airline: 'SINGAPORE', route: 'SIN — LHR', gate: 'A02', sched: '14:20', est: '14:20', status: 'ON TIME', premium: '0.07', payout: '0.50', delayMin: 0 },
-  { code: 'UA 930', airline: 'UNITED', route: 'SFO — LHR', gate: 'E15', sched: '16:45', est: '19:20', status: 'DELAYED', premium: '0.06', payout: '0.55', delayMin: 155 },
-  { code: 'QF 009', airline: 'QANTAS', route: 'PER — LHR', gate: 'F30', sched: '18:10', est: '18:10', status: 'ON TIME', premium: '0.09', payout: '0.60', delayMin: 0 },
-  { code: 'DL 044', airline: 'DELTA', route: 'ATL — CDG', gate: 'B19', sched: '19:55', est: '21:40', status: 'DELAYED', premium: '0.06', payout: '0.48', delayMin: 105 },
-  { code: 'NH 211', airline: 'ANA', route: 'HND — FRA', gate: 'C08', sched: '21:30', est: '21:30', status: 'BOARDING', premium: '0.07', payout: '0.52', delayMin: 0 },
-  { code: 'AC 858', airline: 'AIR CANADA', route: 'YYZ — LHR', gate: 'D17', sched: '22:15', est: '—', status: 'CANCELLED', premium: '0.05', payout: '0.45', delayMin: 999 },
-]
 
 const STATUS_STYLE: Record<FlightStatus, string> = {
   'ON TIME': 'text-emerald-300',
@@ -38,6 +29,37 @@ const STATUS_STYLE: Record<FlightStatus, string> = {
   BOARDING: 'text-sky-200',
   'PAID OUT': 'text-cyan-300',
   CANCELLED: 'text-rose-300',
+}
+
+// Map the on-chain policy status into a board status badge.
+function mapStatus(raw: string, delayFound: boolean): FlightStatus {
+  const s = (raw || '').toLowerCase()
+  if (s.includes('paid') || s.includes('claim')) return 'PAID OUT'
+  if (s.includes('deni') || s.includes('reject')) return 'CANCELLED'
+  if (delayFound) return 'DELAYED'
+  return 'ON TIME'
+}
+
+function policyToFlight(i: number, p: any): Flight {
+  const delayFound = Boolean(p?.delay_found)
+  const rawStatus = String(p?.status ?? 'active')
+  return {
+    key: String(i),
+    code: String(p?.flight ?? `POLICY ${i}`),
+    airline: 'POLICY',
+    route: String(p?.date ?? '— — —'),
+    gate: '--',
+    sched: '--:--',
+    est: '--:--',
+    status: mapStatus(rawStatus, delayFound),
+    premium: '0.05',
+    payout: '0.40',
+    delayMin: delayFound ? Number(p?.threshold_min ?? 0) : 0,
+    threshold: Number(p?.threshold_min ?? 0),
+    delayFound,
+    reasoning: String(p?.reasoning ?? ''),
+    rawStatus,
+  }
 }
 
 // A single split-flap character cell that flips when its value changes.
@@ -83,9 +105,13 @@ function useClock() {
 
 export default function App() {
   const now = useClock()
-  const [board, setBoard] = useState<Flight[]>(INITIAL_BOARD)
+  const [board, setBoard] = useState<Flight[]>([])
   const [selected, setSelected] = useState<Flight | null>(null)
   const [filter, setFilter] = useState<'ALL' | 'DELAYED'>('ALL')
+  const [loading, setLoading] = useState(true)
+  const [busy, setBusy] = useState(false)
+  const [claimingKey, setClaimingKey] = useState<string | null>(null)
+  const [chainStats, setChainStats] = useState({ policies: 0, paid: 0, denied: 0 })
 
   // Policy form
   const [flightNo, setFlightNo] = useState('')
@@ -101,49 +127,94 @@ export default function App() {
     [board, filter],
   )
 
-  const stats = useMemo(() => {
-    const delayed = board.filter((f) => f.status === 'DELAYED').length
-    const paid = board.filter((f) => f.status === 'PAID OUT').length
-    const totalPayout = board
-      .filter((f) => f.status === 'PAID OUT')
-      .reduce((s, f) => s + parseFloat(f.payout), 0)
-    return { delayed, paid, totalPayout }
-  }, [board])
+  async function loadPolicies() {
+    setLoading(true)
+    try {
+      const stats = (await read('stats')) as any
+      const policies = Number(stats?.policies ?? 0)
+      setChainStats({
+        policies,
+        paid: Number(stats?.paid ?? 0),
+        denied: Number(stats?.denied ?? 0),
+      })
+      const loaded: Flight[] = []
+      for (let i = 0; i < policies; i++) {
+        try {
+          const p = (await read('get_policy', [String(i)])) as any
+          if (p) loaded.push(policyToFlight(i, p))
+        } catch {
+          // skip unreadable policy
+        }
+      }
+      setBoard(loaded.reverse())
+    } catch (e: any) {
+      toast.error(`Failed to load policies: ${e?.message ?? e}`)
+    } finally {
+      setLoading(false)
+    }
+  }
 
-  function buyPolicy() {
+  useEffect(() => {
+    loadPolicies()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  async function buyPolicy() {
     if (!flightNo.trim()) {
       toast.error('Enter a flight number to insure.')
       return
     }
-    const payout = (premium * 8).toFixed(2)
-    const newFlight: Flight = {
-      code: flightNo.toUpperCase(),
-      airline: 'YOUR POLICY',
-      route: '— — —',
-      gate: '--',
-      sched: '--:--',
-      est: '--:--',
-      status: 'ON TIME',
-      premium: premium.toFixed(2),
-      payout,
-      delayMin: 0,
+    if (!date) {
+      toast.error('Pick a departure date.')
+      return
     }
-    setBoard((b) => [newFlight, ...b])
-    toast.success(`Policy minted · ${flightNo.toUpperCase()} · payout ${payout} ETH if delayed > ${threshold}m`)
-    setFlightNo('')
+    setBusy(true)
+    const tid = toast.loading('Minting policy on-chain… (30–60s)')
+    try {
+      await write('buy_policy', [flightNo.toUpperCase(), date, threshold])
+      const stats = (await read('stats')) as any
+      const policies = Number(stats?.policies ?? 0)
+      toast.success(`Policy minted · ${flightNo.toUpperCase()} · ${policies} active policies`, { id: tid })
+      setFlightNo('')
+      await loadPolicies()
+    } catch (e: any) {
+      toast.error(`Mint failed: ${e?.message ?? e}`, { id: tid })
+    } finally {
+      setBusy(false)
+    }
   }
 
   function onRowClick(f: Flight) {
     setSelected(f)
-    if (f.status === 'DELAYED') {
-      toast(`${f.code} delayed ${f.delayMin}m — claim ${f.payout} ETH ready`, { icon: '🛬' })
-    }
   }
 
-  function claim(f: Flight) {
-    setBoard((b) => b.map((x) => (x.code === f.code ? { ...x, status: 'PAID OUT' } : x)))
-    setSelected((s) => (s ? { ...s, status: 'PAID OUT' } : s))
-    toast.success(`${f.payout} ETH settled to wallet — claim closed`)
+  async function claim(f: Flight) {
+    setClaimingKey(f.key)
+    const tid = toast.loading(`Filing claim for ${f.code}… (30–60s)`)
+    try {
+      await write('file_claim', [f.key])
+      const p = (await read('get_policy', [f.key])) as any
+      const updated = policyToFlight(Number(f.key), p)
+      setBoard((b) => b.map((x) => (x.key === f.key ? updated : x)))
+      setSelected((s) => (s && s.key === f.key ? updated : s))
+      const stats = (await read('stats')) as any
+      setChainStats({
+        policies: Number(stats?.policies ?? 0),
+        paid: Number(stats?.paid ?? 0),
+        denied: Number(stats?.denied ?? 0),
+      })
+      if (updated.status === 'PAID OUT') {
+        toast.success(`Claim approved — delay confirmed, payout settled`, { id: tid })
+      } else if (updated.status === 'CANCELLED') {
+        toast.error(`Claim denied — ${updated.reasoning || 'no qualifying delay found'}`, { id: tid })
+      } else {
+        toast(`Claim filed — status: ${updated.rawStatus}`, { id: tid })
+      }
+    } catch (e: any) {
+      toast.error(`Claim failed: ${e?.message ?? e}`, { id: tid })
+    } finally {
+      setClaimingKey(null)
+    }
   }
 
   return (
@@ -165,8 +236,9 @@ export default function App() {
             <span className="text-2xl font-bold tabular-nums tracking-widest text-emerald-300">{clock}</span>
           </div>
           <div className="flex items-center gap-4 text-[11px] tracking-wider">
-            <span className="text-amber-300">⬤ {stats.delayed} DELAYED</span>
-            <span className="text-cyan-300">⬤ {stats.paid} PAID</span>
+            <span className="text-sky-200">⬤ {chainStats.policies} POLICIES</span>
+            <span className="text-cyan-300">⬤ {chainStats.paid} PAID</span>
+            <span className="text-rose-300">⬤ {chainStats.denied} DENIED</span>
             <span className="hidden text-sky-200 sm:inline">CONTRACT {CONTRACT.slice(0, 6)}…{CONTRACT.slice(-4)}</span>
           </div>
         </div>
@@ -176,7 +248,7 @@ export default function App() {
         {/* THE BOARD */}
         <section className="overflow-hidden rounded-xl border-2 border-[#0A4D8C] bg-[#0a2c4d] shadow-2xl">
           <div className="flex items-center justify-between border-b border-[#0A4D8C]/60 bg-[#06223f] px-4 py-2.5">
-            <h2 className="text-sm font-bold tracking-[0.35em] text-amber-300">◗ DEPARTURES</h2>
+            <h2 className="text-sm font-bold tracking-[0.35em] text-amber-300">◗ POLICIES</h2>
             <div className="flex gap-1 text-[11px]">
               {(['ALL', 'DELAYED'] as const).map((f) => (
                 <button
@@ -195,43 +267,43 @@ export default function App() {
           {/* Column headers */}
           <div className="grid grid-cols-[1.1fr_1.4fr_0.7fr_0.7fr_1fr_0.9fr] gap-2 border-b border-amber-300/30 px-4 py-2 text-[10px] tracking-[0.25em] text-amber-200/80">
             <span>FLIGHT</span>
-            <span>ROUTE</span>
-            <span>GATE</span>
-            <span>SCHED</span>
+            <span>DATE</span>
+            <span>THRESH</span>
+            <span>DELAY</span>
             <span>STATUS</span>
-            <span className="text-right">PAYOUT</span>
+            <span className="text-right">CLAIM</span>
           </div>
 
           <div className="divide-y divide-white/5">
             {visible.map((f, i) => (
               <motion.button
-                key={f.code + i}
+                key={f.key}
                 onClick={() => onRowClick(f)}
                 initial={{ opacity: 0, x: -12 }}
                 animate={{ opacity: 1, x: 0 }}
                 transition={{ delay: i * 0.04 }}
                 className={`grid w-full grid-cols-[1.1fr_1.4fr_0.7fr_0.7fr_1fr_0.9fr] items-center gap-2 px-4 py-2 text-left transition hover:bg-white/5 ${
-                  selected?.code === f.code ? 'bg-amber-300/10 ring-1 ring-inset ring-amber-300/40' : ''
+                  selected?.key === f.key ? 'bg-amber-300/10 ring-1 ring-inset ring-amber-300/40' : ''
                 }`}
               >
                 <FlapText text={f.code} className="text-sm" />
                 <span className="truncate text-sm tracking-widest text-sky-100">{f.route}</span>
-                <FlapText text={f.gate} className="text-xs" />
-                <FlapText text={f.est === '—' ? f.sched : f.est} className="text-xs" />
+                <FlapText text={`${f.threshold}m`} className="text-xs" />
+                <FlapText text={f.delayFound ? 'YES' : '—'} className="text-xs" />
                 <span className={`text-xs font-bold tracking-widest ${STATUS_STYLE[f.status]}`}>
                   {f.status === 'DELAYED' && <span className="mr-1 animate-pulse">●</span>}
                   {f.status}
                 </span>
                 <span className="text-right text-sm font-bold tabular-nums text-amber-300">
-                  {f.payout === '—' ? '—' : `${f.payout} Ξ`}
+                  {f.status === 'ON TIME' || f.status === 'DELAYED' ? 'FILE' : '✓'}
                 </span>
               </motion.button>
             ))}
           </div>
 
           <div className="flex items-center justify-between border-t border-amber-300/20 bg-[#06223f] px-4 py-2 text-[10px] tracking-[0.25em] text-sky-300">
-            <span>LIVE ORACLE FEED · {visible.length} FLIGHTS</span>
-            <span className="text-cyan-300">TOTAL SETTLED {stats.totalPayout.toFixed(2)} Ξ</span>
+            <span>{loading ? 'LOADING ORACLE FEED…' : `LIVE ORACLE FEED · ${visible.length} POLICIES`}</span>
+            <span className="text-cyan-300">{chainStats.paid} SETTLED · {chainStats.denied} DENIED</span>
           </div>
         </section>
 
@@ -286,9 +358,10 @@ export default function App() {
             </div>
             <button
               onClick={buyPolicy}
-              className="w-full rounded bg-amber-400 py-2.5 text-sm font-bold tracking-[0.2em] text-[#06223f] transition hover:bg-amber-300"
+              disabled={busy}
+              className="w-full rounded bg-amber-400 py-2.5 text-sm font-bold tracking-[0.2em] text-[#06223f] transition hover:bg-amber-300 disabled:opacity-50"
             >
-              MINT POLICY →
+              {busy ? 'MINTING…' : 'MINT POLICY →'}
             </button>
           </div>
 
@@ -298,7 +371,7 @@ export default function App() {
             <AnimatePresence mode="wait">
               {selected ? (
                 <motion.div
-                  key={selected.code}
+                  key={selected.key}
                   initial={{ opacity: 0, y: 10 }}
                   animate={{ opacity: 1, y: 0 }}
                   exit={{ opacity: 0, y: -10 }}
@@ -308,35 +381,36 @@ export default function App() {
                     <FlapText text={selected.code} className="text-base" />
                     <span className={`text-xs font-bold ${STATUS_STYLE[selected.status]}`}>{selected.status}</span>
                   </div>
-                  <div className="text-xs tracking-widest text-sky-200">{selected.airline}</div>
+                  <div className="text-xs tracking-widest text-sky-200">POLICY #{selected.key}</div>
                   <div className="border-t border-dashed border-white/20 pt-2 text-xs tracking-widest text-sky-100">
-                    {selected.route} · GATE {selected.gate}
+                    DEP {selected.route} · THRESHOLD {selected.threshold}m
                   </div>
                   <div className="flex justify-between text-xs text-sky-200">
-                    <span>SCHED {selected.sched}</span>
-                    <span>EST {selected.est}</span>
+                    <span>DELAY FOUND</span>
+                    <span className={selected.delayFound ? 'text-amber-300' : 'text-sky-400'}>
+                      {selected.delayFound ? 'YES' : 'NOT YET'}
+                    </span>
                   </div>
-                  {selected.delayMin > 0 && selected.delayMin < 999 && (
-                    <div className="text-xs text-amber-300">DELAY · {selected.delayMin} MIN</div>
+                  {selected.reasoning && (
+                    <div className="rounded bg-[#06223f] px-3 py-2 text-[11px] leading-relaxed tracking-normal text-sky-200">
+                      {selected.reasoning}
+                    </div>
                   )}
-                  <div className="mt-2 flex items-center justify-between rounded bg-[#06223f] px-3 py-2">
-                    <span className="text-[10px] tracking-widest text-sky-300">PAYOUT</span>
-                    <span className="text-xl font-bold tabular-nums text-amber-300">{selected.payout} Ξ</span>
-                  </div>
-                  {selected.status === 'DELAYED' ? (
+                  {selected.status === 'ON TIME' || selected.status === 'DELAYED' ? (
                     <button
                       onClick={() => claim(selected)}
-                      className="w-full rounded bg-emerald-400 py-2 text-sm font-bold tracking-[0.2em] text-[#06223f] transition hover:bg-emerald-300"
+                      disabled={claimingKey === selected.key}
+                      className="w-full rounded bg-emerald-400 py-2 text-sm font-bold tracking-[0.2em] text-[#06223f] transition hover:bg-emerald-300 disabled:opacity-50"
                     >
-                      CLAIM {selected.payout} Ξ
+                      {claimingKey === selected.key ? 'FILING…' : 'FILE CLAIM'}
                     </button>
                   ) : selected.status === 'PAID OUT' ? (
                     <div className="rounded border border-cyan-400/40 py-2 text-center text-xs tracking-widest text-cyan-300">
                       ✓ SETTLED ON-CHAIN
                     </div>
                   ) : (
-                    <div className="rounded border border-white/15 py-2 text-center text-xs tracking-widest text-sky-300">
-                      MONITORING · NO DELAY YET
+                    <div className="rounded border border-rose-400/40 py-2 text-center text-xs tracking-widest text-rose-300">
+                      ✕ CLAIM DENIED
                     </div>
                   )}
                 </motion.div>
@@ -347,9 +421,9 @@ export default function App() {
                   animate={{ opacity: 1 }}
                   className="py-6 text-center text-xs tracking-widest text-sky-400"
                 >
-                  ◗ SELECT A ROW ON THE BOARD
+                  ◗ SELECT A POLICY ROW
                   <br />
-                  <span className="text-sky-500">DELAYED FLIGHTS ARE CLAIMABLE</span>
+                  <span className="text-sky-500">FILE A CLAIM TO TRIGGER ORACLE</span>
                 </motion.p>
               )}
             </AnimatePresence>
