@@ -26,12 +26,6 @@ The EVM pool holds premiums and pays claims. GenLayer verifies the real-world ev
 
 **GenLayer (Bradbury):** `0x75787a83F7742b109e5BF723cA9d369CB1DA411B`
 
-## Test result
-
-Policy: BA287, 2025-06-10, threshold 120min
-→ AI fetched flightstats, found "Flight Status Not Available / DATE IS OUT OF RANGE"
-→ **Denied** (correctly: no data = 0 delay)
-
 ## Structure
 
 ```
