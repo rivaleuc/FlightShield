@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { Toaster, toast } from 'sonner'
-import { read, write, CONTRACT } from './genlayer'
+import { read, write, CONTRACT, connectWallet, isWalletConnected } from './genlayer'
 
 type FlightStatus = 'ON TIME' | 'DELAYED' | 'BOARDING' | 'PAID OUT' | 'CANCELLED'
 
@@ -112,6 +112,19 @@ export default function App() {
   const [busy, setBusy] = useState(false)
   const [claimingKey, setClaimingKey] = useState<string | null>(null)
   const [chainStats, setChainStats] = useState({ policies: 0, paid: 0, denied: 0 })
+  const [wallet, setWallet] = useState<string | null>(null)
+
+  const shortAddr = (a: string) => `${a.slice(0, 6)}…${a.slice(-4)}`
+
+  async function handleConnect() {
+    try {
+      const addr = await connectWallet()
+      setWallet(addr)
+      toast.success(`Wallet connected · ${shortAddr(addr)}`)
+    } catch (e: any) {
+      toast.error(e?.message ?? 'Failed to connect wallet')
+    }
+  }
 
   // Policy form
   const [flightNo, setFlightNo] = useState('')
@@ -240,6 +253,12 @@ export default function App() {
             <span className="text-cyan-300">⬤ {chainStats.paid} PAID</span>
             <span className="text-rose-300">⬤ {chainStats.denied} DENIED</span>
             <span className="hidden text-sky-200 sm:inline">CONTRACT {CONTRACT.slice(0, 6)}…{CONTRACT.slice(-4)}</span>
+            <button
+              onClick={handleConnect}
+              className="rounded bg-amber-400 px-3 py-1.5 text-[11px] font-bold tracking-[0.2em] text-[#06223f] transition hover:bg-amber-300"
+            >
+              {wallet ? shortAddr(wallet) : isWalletConnected() ? 'CONNECTED' : 'CONNECT WALLET'}
+            </button>
           </div>
         </div>
       </header>
