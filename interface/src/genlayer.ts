@@ -1,7 +1,7 @@
 import { createClient } from 'genlayer-js'
 import { testnetBradbury } from 'genlayer-js/chains'
 import type { Address } from 'genlayer-js/types'
-export const CONTRACT = '0x75787a83F7742b109e5BF723cA9d369CB1DA411B' as Address
+export const CONTRACT = '0xEC47ea313A5F00f403d90b009655E28e514e8BF0' as Address
 const BRADBURY_HEX = '0x107d'
 let client = createClient({ chain: testnetBradbury })
 let walletAddress: string | null = null

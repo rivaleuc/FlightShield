@@ -8,16 +8,11 @@ type FlightStatus = 'ON TIME' | 'DELAYED' | 'BOARDING' | 'PAID OUT' | 'CANCELLED
 type Flight = {
   key: string
   code: string
-  airline: string
   route: string
-  gate: string
-  sched: string
-  est: string
   status: FlightStatus
-  premium: string
-  payout: string
   delayMin: number
   threshold: number
+  eligible: boolean
   delayFound: boolean
   reasoning: string
   rawStatus: string
@@ -41,21 +36,18 @@ function mapStatus(raw: string, delayFound: boolean): FlightStatus {
 }
 
 function policyToFlight(i: number, p: any): Flight {
-  const delayFound = Boolean(p?.delay_found)
+  const delayMin = Number(p?.delay_found ?? 0)
   const rawStatus = String(p?.status ?? 'active')
+  const eligible = Boolean(p?.eligible)
+  const delayFound = rawStatus !== 'active' && delayMin > 0
   return {
     key: String(i),
     code: String(p?.flight ?? `POLICY ${i}`),
-    airline: 'POLICY',
     route: String(p?.date ?? '— — —'),
-    gate: '--',
-    sched: '--:--',
-    est: '--:--',
-    status: mapStatus(rawStatus, delayFound),
-    premium: '0.05',
-    payout: '0.40',
-    delayMin: delayFound ? Number(p?.threshold_min ?? 0) : 0,
+    status: mapStatus(rawStatus, delayMin > 0),
+    delayMin,
     threshold: Number(p?.threshold_min ?? 0),
+    eligible,
     delayFound,
     reasoning: String(p?.reasoning ?? ''),
     rawStatus,
@@ -130,7 +122,6 @@ export default function App() {
   const [flightNo, setFlightNo] = useState('')
   const [date, setDate] = useState('')
   const [threshold, setThreshold] = useState(120)
-  const [premium, setPremium] = useState(0.05)
 
   const clock = now.toLocaleTimeString('en-GB', { hour12: false })
   const dateStr = now.toLocaleDateString('en-GB', { weekday: 'short', day: '2-digit', month: 'short' }).toUpperCase()
@@ -308,7 +299,7 @@ export default function App() {
                 <FlapText text={f.code} className="text-sm" />
                 <span className="truncate text-sm tracking-widest text-sky-100">{f.route}</span>
                 <FlapText text={`${f.threshold}m`} className="text-xs" />
-                <FlapText text={f.delayFound ? 'YES' : '—'} className="text-xs" />
+                <FlapText text={f.delayMin > 0 ? `${f.delayMin}m` : '—'} className="text-xs" />
                 <span className={`text-xs font-bold tracking-widest ${STATUS_STYLE[f.status]}`}>
                   {f.status === 'DELAYED' && <span className="mr-1 animate-pulse">●</span>}
                   {f.status}
@@ -357,23 +348,10 @@ export default function App() {
               step={15}
               value={threshold}
               onChange={(e) => setThreshold(+e.target.value)}
-              className="mb-3 w-full accent-[#0A4D8C]"
+              className="mb-4 w-full accent-[#0A4D8C]"
             />
-            <label className="mb-1 block text-[10px] tracking-widest text-[#0A4D8C]/70">
-              PREMIUM · <span className="font-bold text-[#0A4D8C]">{premium.toFixed(2)} Ξ</span>
-            </label>
-            <input
-              type="range"
-              min={0.01}
-              max={0.2}
-              step={0.01}
-              value={premium}
-              onChange={(e) => setPremium(+e.target.value)}
-              className="mb-3 w-full accent-[#0A4D8C]"
-            />
-            <div className="mb-3 flex items-center justify-between rounded bg-[#0A4D8C] px-3 py-2 text-white">
-              <span className="text-[10px] tracking-widest">EST. PAYOUT</span>
-              <span className="text-lg font-bold tabular-nums text-amber-300">{(premium * 8).toFixed(2)} Ξ</span>
+            <div className="mb-3 rounded bg-[#0A4D8C]/5 px-3 py-2 text-[10px] leading-relaxed tracking-wider text-[#0A4D8C]/70">
+              A claim pays out when validators confirm an actual departure delay at or above your threshold.
             </div>
             <button
               onClick={buyPolicy}
@@ -407,7 +385,7 @@ export default function App() {
                   <div className="flex justify-between text-xs text-sky-200">
                     <span>DELAY FOUND</span>
                     <span className={selected.delayFound ? 'text-amber-300' : 'text-sky-400'}>
-                      {selected.delayFound ? 'YES' : 'NOT YET'}
+                      {selected.rawStatus === 'active' ? 'NOT YET' : `${selected.delayMin}m`}
                     </span>
                   </div>
                   {selected.reasoning && (

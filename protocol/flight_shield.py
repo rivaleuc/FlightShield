@@ -54,6 +54,7 @@ class FlightShield(gl.Contract):
 
         verdict = self._check_flight(policy)
         policy["delay_found"] = verdict["delay_minutes"]
+        policy["eligible"] = verdict["eligible"]
         policy["reasoning"] = verdict["reasoning"]
         policy["source"] = verdict["source"]
 
@@ -69,6 +70,9 @@ class FlightShield(gl.Contract):
     def _check_flight(self, policy: dict) -> dict:
         flight = policy["flight"]
         date = policy["date"]
+        # Capture the policy's threshold into the closure so the anchor
+        # (eligible == delay >= threshold) is deterministic for this claim.
+        threshold_min = int(policy["threshold_min"])
 
         def leader_fn() -> str:
             # Try to fetch flight status from a public source
@@ -100,9 +104,32 @@ Reply ONLY valid JSON:
 No markdown."""
 
             raw = gl.nondet.exec_prompt(prompt, response_format="json")
-            if isinstance(raw, dict):
-                return json.dumps(raw)
-            return str(raw).strip()
+            data = raw if isinstance(raw, dict) else json.loads(str(raw).strip())
+
+            # Deterministic normalization + anchor. Coerce delay to a clean int
+            # in [0, 6000], then DERIVE eligible from the captured threshold so
+            # honest leaders always satisfy the validator invariant.
+            mins = data.get("delay_minutes")
+            if isinstance(mins, bool) or not isinstance(mins, int):
+                try:
+                    mins = int(mins)
+                except Exception:
+                    mins = 0
+            if mins < 0:
+                mins = 0
+            if mins > 6000:
+                mins = 6000
+            reasoning = str(data.get("reasoning", "")).strip()
+            if not reasoning:
+                reasoning = "no reasoning provided"
+            source = str(data.get("source", "")).strip() or "unknown"
+            eligible = mins >= threshold_min
+            return json.dumps({
+                "delay_minutes": mins,
+                "eligible": eligible,
+                "reasoning": reasoning,
+                "source": source,
+            })
 
         def validator_fn(leader_result) -> bool:
             if not isinstance(leader_result, gl.vm.Return):
@@ -110,9 +137,19 @@ No markdown."""
             try:
                 data = json.loads(leader_result.calldata)
                 mins = data.get("delay_minutes")
-                if not isinstance(mins, int) or mins < 0:
+                # int field guard: reject bool (bool is an int subclass).
+                if isinstance(mins, bool) or not isinstance(mins, int):
                     return False
-                if not isinstance(data.get("reasoning"), str):
+                if mins < 0 or mins > 6000:
+                    return False
+                eligible = data.get("eligible")
+                if not isinstance(eligible, bool):
+                    return False
+                # Cross-field invariant (the ANCHOR): eligible iff delay >= threshold.
+                if eligible != (mins >= threshold_min):
+                    return False
+                reasoning = data.get("reasoning")
+                if not isinstance(reasoning, str) or not reasoning.strip():
                     return False
                 return True
             except Exception:

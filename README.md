@@ -4,8 +4,8 @@
 
 FlightShield is parametric cover with no claims adjuster. A traveller buys a policy for a flight and a delay threshold; when they file a claim, GenLayer validators look up the flight's real status, agree on the actual delay, and the contract pays out automatically if the delay clears the threshold — no paperwork, no insurer deciding whether to honour it.
 
-- **Contract (Bradbury, chain 4221):** `0x75787a83F7742b109e5BF723cA9d369CB1DA411B`
-- **Explorer:** https://explorer-bradbury.genlayer.com/contract/0x75787a83F7742b109e5BF723cA9d369CB1DA411B
+- **Contract (Bradbury, chain 4221):** `0xEC47ea313A5F00f403d90b009655E28e514e8BF0`
+- **Explorer:** https://explorer-bradbury.genlayer.com/contract/0xEC47ea313A5F00f403d90b009655E28e514e8BF0
 - **Live app:** https://flightshield.pages.dev
 
 ## What it does
